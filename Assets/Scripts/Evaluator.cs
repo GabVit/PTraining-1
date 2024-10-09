@@ -1,267 +1,101 @@
-using System;
+using System.Linq;
+using ResultSaver;
+using Spawner;
 using UnityEngine;
-using UnityEngine.SceneManagement;
-using UnityEngine.Serialization;
 
-public class Evaluator : MonoBehaviour
-{
-    [Header("Settings")] public float maxSimulationTime = 90f; // 1 minute and 30 seconds
-    public float maxScore = 10f;
-    public float minPassingScore = 6f;
-    public float scorePenaltyPerEnemy = 1f;
-    public float scorePenaltyForCivilian = 2f;
-    public float scorePenaltyForExtraBullet = 0.25f;
-    public float scorePenaltyForUnloading = 1f;
+public class Evaluator : MonoBehaviour {
+  [Header("Settings")] public float maxSimulationTime = 90f;
+  [SerializeField] public float maxScore = 10f;
+  [SerializeField] public float minPassingScore = 6f;
+  [SerializeField] public float scorePenaltyForEnemy = 1f;
+  [SerializeField] public float scorePenaltyForCivilian = 2f;
+  [SerializeField] public float scorePenaltyForExtraBullet = 0.25f;
+  [SerializeField] public float scorePenaltyForLeavingSafetyOff = 1f;
+  [SerializeField] public Pistol[] pistols;
+  [SerializeField] public ResultSaver.ResultSaver resultSaver;
 
-    private float currentScore;
-    private float elapsedTime;
-    private bool simulationEnded;
-    private bool playerDead;
-    private String playerDeadString = "No";
-    [FormerlySerializedAs("SeguroAlFinal")] public String seguroAlFinal = "Si";
+  private float elapsedTime;
+  private bool hasSimulationEnded;
+  private bool isPlayerDead;
+  private bool hasSafetyBeenLeftOn;
 
-    private int enemytoneutralize;
-    private int civilianhit;
-    private int totalEnemys;
-    private int bullettouse;
-    private int bulletused;
-    private SpawnManager spawnManager;
-    Pistol pistol;
+  private int enemiesKilled;
+  private int civiliansKilled;
+  private int totalEnemyCount;
+  private int parBulletCount;
+  private int usedBulletCount;
+  private SpawnManager spawnManager;
 
-
-    void Start()
-    {
-        spawnManager = FindObjectOfType<SpawnManager>();
-
-        bullettouse = spawnManager.GetTotalEnemies();
+  private const int PASSED_SCENE = 4;
+  private const int FAILED_SCENE = 3;
 
 
-        // Restablecer variables al inicio de la simulación
-        elapsedTime = 0f;
-        pistol = FindObjectOfType<Pistol>();
+  private void Start() {
+    spawnManager = FindObjectOfType<SpawnManager>();
+    parBulletCount = spawnManager.GetTotalEnemies();
+    elapsedTime = 0f;
+    totalEnemyCount = 0;
+    enemiesKilled = 0;
+    usedBulletCount = 0;
+    civiliansKilled = 0;
+  }
 
-        totalEnemys = 0;
-        enemytoneutralize = 0;
-        bulletused = 0;
+  private void Update() {
+    if (hasSimulationEnded) return;
 
-        playerDeadString = "No";
-        civilianhit = 0;
-        currentScore = 10;
-    }
+    elapsedTime += Time.deltaTime;
+    if (elapsedTime >= maxSimulationTime) return;
+    EndSimulation();
+  }
 
-    void RestScore(float score)
-    {
-        currentScore -= score;
-        currentScore = Mathf.Clamp(currentScore, 1f, 10f); // Restringir la puntuación dentro del rango de 1 a 10
-    }
+  public void OnEnemyKilled() => enemiesKilled++;
 
-    void Update()
-    {
-        if (simulationEnded)
-            return;
+  public void OnCivilianKilled() => civiliansKilled++;
 
-        elapsedTime += Time.deltaTime;
-        if (elapsedTime >= maxSimulationTime)
-        {
-            EndSimulation();
-        }
-    }
+  public void OnBulletUsed() => usedBulletCount++;
 
-    public void EnemyNeutralized()
-    {
-        enemytoneutralize--;
-    }
+  private float CheckSafetyPenalty() => pistols.Count(pistol => pistol.isSafetyOn) * scorePenaltyForLeavingSafetyOff;
 
-    private void EnemyMissed()
-    {
-        RestScore(scorePenaltyPerEnemy * (totalEnemys + enemytoneutralize));
-    }
+  private float ConsiderMissedEnemies() => scorePenaltyForEnemy * (totalEnemyCount - enemiesKilled);
+  private float ConsiderKilledCivilians() => scorePenaltyForCivilian * civiliansKilled;
 
-    public void CivilianHit()
-    {
-        civilianhit++;
-        RestScore(scorePenaltyForCivilian);
-        Debug.Log("Tota civil impacted: " + civilianhit);
-    }
+  private bool HasPassed(float score) => score < minPassingScore && !isPlayerDead;
 
-    public void OnBulletUsed() // shift f6 para renombar rapido// 
-    {
-        bulletused++;
-    }
+  public float GetElapsedTime() => elapsedTime;
 
-    private void TotalpointBulletUsed()
-    {
-        int total = bulletused - bullettouse;
-        if (total > 0)
-        {
-            RestScore(scorePenaltyForExtraBullet * total);
-        }
-        else
-        {
-            RestScore(0);
-        }
-    }
+  public int GetCiviliansKilled() => civiliansKilled;
 
-    private void CheckUnloadPenalty()
-    {
-        if (pistol.isSafetyOn != true)
-        {
-            UnloadPenalty();
-        }
-    }
+  public int GetEnemiesKilled() => enemiesKilled;
 
-    private void UnloadPenalty()
-    {
-        seguroAlFinal = "No";
-        RestScore(scorePenaltyForUnloading);
-    }
+  private float ConsiderUsedBullets() {
+    var total = usedBulletCount - parBulletCount;
+    return total > 0 ? scorePenaltyForExtraBullet * total : 0f;
+  }
 
-    public void ReceiveShot()
-    {
-        playerDead = true;
-        playerDeadString = "Si";
-        EndSimulation();
-    }
+  public void OnReceiveShot() {
+    isPlayerDead = true;
+    EndSimulation();
+  }
 
-    public void EarlyEndSimulation()
-    {
-        Invoke(nameof(EndSimulation), 5f);
-    }
+  public void EndSimulation() {
+    totalEnemyCount = spawnManager.GetTotalEnemies();
+    var score = maxScore;
+    score -= ConsiderKilledCivilians();
+    score -= ConsiderMissedEnemies();
+    score -= CheckSafetyPenalty();
+    score -= ConsiderUsedBullets();
 
-    private void EndSimulation()
-    {
-        totalEnemys = spawnManager.GetTotalEnemies();
-        Debug.Log("Total Enemies to Spawn: " + spawnManager.GetTotalEnemies());
-        Debug.Log("Total Civilians to Spawn: " + spawnManager.GetTotalCivilians());
-        EnemyMissed();
-        CheckUnloadPenalty();
-        TotalpointBulletUsed();
-
-
-        simulationEnded = true;
-        PlayerPrefs.SetFloat("Tiempo", elapsedTime);
-        PlayerPrefs.SetInt("Civiles_Heridos", civilianhit);
-        PlayerPrefs.SetInt("Enemigos_Faltantes", totalEnemys + enemytoneutralize);
-        PlayerPrefs.SetInt("Cartuchos_extra_gastados", bulletused - bullettouse);
-        PlayerPrefs.SetFloat("Puntaje_Final", currentScore);
-        PlayerPrefs.SetString("Muerte_de_agente", playerDeadString);
-        PlayerPrefs.SetString("Seguro", seguroAlFinal);
-
-
-        // Obtener el nombre de la escena actual
-        _ = SceneManager.GetActiveScene().name;
-        //SaveDataToCSV();
-
-        //realizamos una saturacion de currentScore para que no sea negativo
-
-
-        if (currentScore < minPassingScore || playerDead)
-        {
-            SceneTransitionManager.Singleton.GoToSceneAsync(3);
-        }
-        else if (currentScore >= minPassingScore && currentScore < maxScore && playerDead == false)
-        {
-            SceneTransitionManager.Singleton.GoToSceneAsync(4);
-        }
-    }
-
-    public float GetCurrentScore()
-    {
-        return currentScore;
-    }
-
-    public float GetElapsedTime()
-    {
-        return elapsedTime;
-    }
-
-    public int GetCiviliansInjured()
-    {
-        return civilianhit;
-    }
-
-    public int GetEnemiesEliminated()
-    {
-        return -enemytoneutralize;
-    }
-
-    public bool IsSimulationEnded()
-    {
-        return simulationEnded;
-    }
-
-    public String GetSafetyLock()
-    {
-        if (pistol.isSafetyOn)
-        {
-            return "Si";
-        }
-        else
-        {
-            return "No";
-        }
-    }
-
-    public int GetBullets()
-    {
-        // se verifican las balas actuales del cartucho de pistol
-        return pistol.GetBullets();
-    }
-/*
-    private void OnGUI()
-    {
-        GUI.Label(new Rect(40, 50, 200, 20), "Amenazas restantes: " + enemytoneutralize);
-        GUI.Label(new Rect(450, 20, 300, 20), "Tiempo transcurrido: " + elapsedTime);
-        GUI.Label(new Rect(40, 90, 200, 20), "Disparos realizados: " + bulletused);
-        GUI.Label(new Rect(40, 110, 200, 20), "Puntaje actual: " + currentScore);
-    }
-    */
-/*
-    private void SaveDataToCSV()
-{
-    // Crear el nombre del archivo con la fecha y hora actual
-    string fileName = "evaluator_data_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".csv";
-    string filePath;
-
-    // Verificar si se está ejecutando en un Oculus Quest 2
-   /* if (IsOculusQuest2())
-    {
-        // Si es un Oculus Quest 2, guardar en la carpeta Documents
-        filePath = Path.Combine("/storage/emulated/0/Documents", fileName);
-    }
-    else
-    {
-        // De lo contrario, guardar en la carpeta StreamingAssets
-        filePath = Path.Combine(Application.streamingAssetsPath, fileName);
-    //}
-
-    // Crear el archivo CSV y escribir los datos
-    using (StreamWriter writer = new StreamWriter(filePath))
-    {
-        // Escribir los encabezados de las columnas
-        writer.WriteLine("Tiempo de simulacion;Enemigos Faltantes;Civiles impactados;Exceso de balas;Seguro al final del escenario;Muerte del agente;Puntaje Final;Condicion Aprobado o Desaprobado");
-
-        // Escribir los datos de las variables
-        writer.WriteLine($"{elapsedTime};{totalEnemys + enemytoneutralize};{civilianhit};{bulletused - bullettouse};{pistol.isSafetyOn};{PlayerDead};{currentScore};{condition}");
-    }
-
-    Debug.Log("Datos guardados en: " + filePath);
-}
-*/
-// Método para verificar si se está ejecutando en un Oculus Quest 2
-/*
-private bool IsOculusQuest2()
-{
-    // Verificar si el dispositivo actual es de la familia Oculus Quest
-    if (XRDevice
-    {
-        // Verificar si es un Oculus Quest 2 basado en su nombre de modelo
-        if (XRDevice.model.Contains("Quest 2"))
-        {
-            return true;
-        }
-    }
-
-    return false;
-}*/
+    hasSimulationEnded = true;
+    var evaluationResult = new EvaluationResult(
+      elapsedTime,
+      civiliansKilled,
+      totalEnemyCount - enemiesKilled,
+      usedBulletCount - parBulletCount,
+      score,
+      isPlayerDead,
+      pistols.Count(pistol => pistol.isSafetyOn)
+    );
+    resultSaver.SaveResult(evaluationResult);
+    SceneTransitionManager.Singleton.GoToSceneAsync(HasPassed(score) ? FAILED_SCENE : PASSED_SCENE);
+  }
 }
